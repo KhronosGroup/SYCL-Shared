@@ -3,8 +3,9 @@
 |                  |                                     |
 | ---------------- | ----------------------------------- |
 | Name             | SYCL Generalization                 |
-| Date of creation | 3rd June 2019                       |
-| Last updated     | 15th June 2019                      |
+| Date of creation | 3rd Jun 2019                        |
+| Last updated     | 15th Nov  2019                      |
+| Status           | Approved by SYCL working group      |
 | Current revision | 2                                   |
 | Dependencies     | None                                |
 | Available        | N/A                                 |
