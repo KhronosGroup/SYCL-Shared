@@ -11,7 +11,7 @@
 | Available        | N/A                                 |
 | Reply-to         | Ruyman Reyes <ruyman@codeplay.com>  |
 | Original author  | Ruyman Reyes <ruyman@codeplay.com>  |
-| Contributors     | Aksel Alpay <aksel.alpay@uni-heidelberg.de>, Victor Lomuller <victor@codeplay.com>, Toomas Remmelg <Toomas.remmelg@codeplay.com>, Morris Hafner <morris.hafner@codeplay.com> |
+| Contributors     | Aksel Alpay <aksel.alpay@uni-heidelberg.de>, Victor Lomuller <victor@codeplay.com>, Toomas Remmelg <Toomas.remmelg@codeplay.com>, Morris Hafner <morris.hafner@codeplay.com>, Roland Schulz <roland.schulz@intel.com>  |
 
 **The contents of this proposal are to encourage early feedback and are not ratified by the Khronos Group so do not constitute a formal specification.**
 
@@ -105,6 +105,12 @@ in the scope of the current wording for this proposal to address the
 *lambda kernel naming issue*.
 
 ## Revisions
+
+v 0.10:
+
+* Rework of the specialization constant proposal
+  * Add `spec_id` and `spec_constant` definitions
+  * Add API to manipulate a Module spec constants
 
 v 0.9:
 
@@ -306,7 +312,8 @@ Specialization is intended for constant objects that will not have known constan
 until after initial generation of a module in an intermediate representation format (e.g. SPIR-V).
 When a module contains *specialization constants*, the method 
 *`sycl::module<sycl::module_state::input>::has_spec_constant()`* returns `true`.
-Note that, although a module may expose *specialization constants*, not all *device images* inside the module may support them.
+Note that, although a module may expose *specialization constants*, not all *device images* inside the module may natively support them,
+the method *`sycl::module<sycl::module_state::input>::native_spec_constant()`*  returns `true` if the module is capable of using *specialization constants* as immediate value when compiling the module image.
 When *specialization constants* are available but the user doesn't set values on them, the default values are used.
 The default values follow C++ initialization rules whenever not specified by 
 users.
@@ -377,14 +384,38 @@ class module {
    */
   bool has_spec_constant() const noexcept;
 
-  // Available if module_state::input
-  /* set_spec_constant.
-  * If ID is a spec constant residing in the current module, returns a
-  * spec_constant immutable object to represent the binding of the value
-  * to the given module.
-  */
-  template <typename ID, typename T>
-  spec_constant<T, ID> set_spec_constant(T cst);
+  /**
+   * Returns true if the current module can support specialization constants natively.
+   *
+   */
+  bool native_spec_constant() const noexcept;
+
+  // Available if module_status::executable
+  // Retrive the value of the spec constant associated with this module.
+  // Call only valid from the host.
+  template<class T, spec_id<T>& s>
+  spec_constant<T, s> get_spec_constant(handler&);
+
+  // Available if module_status::executable
+  //              Only from C++17
+  // Set the value of the spec constant.
+  // Call only valid from the host.
+  template<auto& s>
+  spec_constant<typename std::remove_reference_t<decltype(s)>::type, s>
+    get_spec_constant(handler&);
+
+  // Available if module_status::input
+  // Set the value of the spec constant.
+  // Call only valid from the host.
+  template<class T, spec_id<T>& s>
+  void set_spec_constant(T);
+
+  // Available if module_status::input
+  //              Only from C++17
+  // Set the value of the spec constant.
+  // Call only valid from the host.
+  template<auto& s>
+  void set_spec_constant(typename std::remove_reference_t<decltype(s)>::type);
 };
 
 }  // namespace sycl
@@ -707,23 +738,46 @@ value to the specialization constant.
 The program can then be build with `build_with_kernel_type` to create a 
 specialized kernel.
 
+### Specialization constant types
+
 On the new, type-safe, module approach, specialization constants are 
-associated with the OpenCL backend. 
-Other backends (e.g. Vulkan) may offer the same functionality, so the
-specialization constant type is defined as an (experimental) general 
+typically associated with SPIR-V module images but are not limited to such image.
+The specialization constant type is defined as an (experimental) general 
 SYCL type as below:
 
 ```cpp
 namespace sycl {
 namespace experimental {
 
-template <typename T, typename ID = T>
+template <typename T>
+class spec_id {
+private:
+  // Implementation defined constructor.
+  spec_id(const spec_id&) = delete;
+  spec_id(spec_id&&) = delete;
+
+public:
+
+  using type = T;
+
+  // Argument `Args` are forwarded to an underlying T Ctor.
+  // This allow the user to setup a default value for the spec_id instance.
+  // The initialization of T must be evaluated at compile time to be valid.
+  template<class... Args >
+  explicit constexpr spec_id(Args&&...);
+};
+
+template <class T, spec_id<T>& s>
 class spec_constant {
 private:
   // Implementation defined constructor.
   spec_constant(/* Implementation defined */);
+  spec_constant(spec_constant&&) = delete;
+
 public:
-  spec_constant();
+  using type = T;
+
+  spec_constant(const spec_constant&) = default;
 
   T get() const; // explicit access.
   operator T() const;  // implicit conversion.
@@ -733,39 +787,133 @@ public:
 }  // namespace sycl
 ```
 
+`spec_id` is used by the *SYCL implementation* to *reference* constant whose
+concrete value will only be known during the application execution.
+To create a new `spec_id` in a module, the user creates a `spec_id` object with an *automatic* or *static* storage duration in the namespace or class scope.
+The user then uses references to this object to bind the `spec_constant` value to the *identifier*.
+
+`spec_id` objects must be forward declare-able and cannot be moved or copied.
+
 `spec_constant` is a *placeholder type* used by the *SYCL implementation* to
 inject the real value of the specialization constant at runtime.
-It also allows implementations that don't support specialization constant
-to hide the value as a parameter, keeping the lambda-capture the same
-irrespectively of the support of the feature.
+For the module associated with the host device, and possibly any device with non native spec constant support, the value is carried by the `spec_constant` object it-self.
+For modules natively supporting specialization constant, implementations must guaranty the values returned by the usage of the spec_constant materialized into a constant.
 
-The interface to set values to the specialization constant
-in the module is backend specific:
+### Setting the value of spec constant
+
+To modify the value of a spec constant, the following API is available.
+
+Given a SYCL module, a spec constant can be set by the `sycl::set_spec_constant` function.
 
 ```cpp
 namespace sycl {
-namespace opencl {
-  template<typename ID, typename T>
-  spec_constant<ID, T> set_spec_constant(module<module_state::executable> syclModule, T cst) const;
-}  // namespace opencl
+
+template<class T, spec_id<T>& s>
+void set_spec_constant(module<module_status::input> syclModule, T);
+
+}  // namespace sycl
+```
+If C++17 or later is enabled, then the following overload is available
+```cpp
+namespace sycl {
+
+template<auto& s>
+void set_spec_constant(module<module_status::input> syclModule,
+                       typename std::remove_reference_t<decltype(s)>::type);
+
 }  // namespace sycl
 ```
 
-For simplicity, the spec constant placeholder type can also be obtained from
-the command group handler:
+It is valid for a user to set several times a spec constant with the same `spec_id`,
+only the last version of the value will be consider when building the module.
+Calling this function is not allowed during the submission of a task.
+
+### Getting the value of spec constant in kernel
+
+To retrive the value of a spec constant in a SYCL kernel context, the following API is available.
+
+```cpp
+namespace sycl {
+
+template<class T, spec_id<T>& s>
+T get_spec_constant(const spec_constant<T, s>&);
+
+}  // namespace sycl
+```
+If C++17 or later is enabled, then the following overload is available
+```cpp
+namespace sycl {
+
+template<auto& s>
+typename std::remove_reference_t<decltype(s)>::type
+get_spec_constant(const spec_constant<typename std::remove_reference_t<decltype(s)>::type, s>&);
+
+}  // namespace sycl
+```
+
+This call is only valid whitin a SYCL kernel context and the `spec_constant` value must have been
+created by the handler that invoked the kernel from which the `sycl::get_spec_constant` is called.
+
+If the module has native support for specialization constant,
+the returned value becomes a constant value available for the runtime compiler to use for optimisations.
+
+**Note:** the value may become a constant (known numerical value), although this may only happen at runtime.
+From the SYCL compiler's perspective (C++ compiler) the value is understood to be a runtime value and
+for this reason it is not possible to use such value in a `constexpr`.
+
+### Retrieving a spec constant placeholder
+
+A `spec_constant` handler can be retrieved from the command group handler by either:
+ - Getting the placeholder for a previously set specialization constant value;
+   - If no specialization constant where ever set, then the *placeholder* object holds the default value of its `spec_id`.
+ - Setting a specialization constant value and retrieving the placeholder
+   - Performance notice: this function may cause the SYCL runtime to implicitly recompile the relevant SYCL module with the given value. This may have an important effect on performances and users should check their vendor recommendations on how to efficiently uses this functionality.
+
+The command group `handler` class is extended with the following API:
 
 ```cpp
 namespace sycl {
  class handler {
 // ...
 public:
- template <typename ID, typename T>
- spec_constant<T, ID> get_spec_constant();
+
+ template<class T, spec_id<T>& s>
+ spec_constant<T, s> set_spec_constant(T);
+
+ template<class T, spec_id<T>& s>
+ spec_constant<T, s> get_spec_constant();
 // ...
 };
 
 }  // namespace sycl
 ```
+If C++17 or later is enabled, then the following overloads are available
+```cpp
+namespace sycl {
+ class handler {
+// ...
+public:
+
+  // Same as template<class T, spec_id<T>& s> spec_constant<T, s> set_spec_constant(T)
+  template<auto& s>
+  spec_constant<typename std::remove_reference_t<decltype(s)>::type, s>
+    set_spec_constant(typename std::remove_reference_t<decltype(s)>::type);
+
+  // Same as template<class T, spec_id<T>& s> spec_constant<T, s> get_spec_constant()
+  template<auto& s>
+  spec_constant<typename std::remove_reference_t<decltype(s)>::type, s>
+    get_spec_constant();
+// ...
+};
+
+}  // namespace sycl
+```
+
+| Member function                                                             | Description                                                                                                                               |
+|-----------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `template<class T, spec_id<T>& s> spec_constant<T, s> set_spec_constant(T)` | Set the given value as the specialization constant value in the underlying module and returns a `spec_constant` handler usable in kernel. If the user specify to the handle a specific module to use, then the value given to `set_spec_constant` must match the the one used to build the module. In case of mismatch, the SYCL runtime raises an error. |
+| `template<class T, spec_id<T>& s> spec_constant<T, s> get_spec_constant()`  | Returns a `spec_constant` handler usable in kernel.                                                                                       |
+
 
 Note the value of the specialization constant depends on the module that is used,
 not on the placeholder object.
