@@ -742,12 +742,10 @@ specialized kernel.
 
 On the new, type-safe, module approach, specialization constants are 
 typically associated with SPIR-V module images but are not limited to such image.
-The specialization constant type is defined as an (experimental) general 
-SYCL type as below:
+The specialization constant type is defined as an general SYCL type as below:
 
 ```cpp
 namespace sycl {
-namespace experimental {
 
 template <typename T>
 class spec_id {
@@ -755,6 +753,7 @@ private:
   // Implementation defined constructor.
   spec_id(const spec_id&) = delete;
   spec_id(spec_id&&) = delete;
+
 
 public:
 
@@ -769,21 +768,22 @@ public:
 
 template <class T, spec_id<T>& s>
 class spec_constant {
-private:
-  // Implementation defined constructor.
-  spec_constant(/* Implementation defined */);
-  spec_constant(spec_constant&&) = delete;
-
 public:
   using type = T;
 
+  // Create an empty (invalid) spec constant.
+  // Remains invalid until initialized by a call
+  // to handler::set_spec_constant or
+  // to handler::get_spec_constant
+  spec_constant();
+
   spec_constant(const spec_constant&) = default;
+  spec_constant& operator=(const spec_constant&) = default;
 
   T get() const; // explicit access.
   operator T() const;  // implicit conversion.
 };
 
-}  // namespace experimental
 }  // namespace sycl
 ```
 
@@ -798,6 +798,7 @@ The user then uses references to this object to bind the `spec_constant` value t
 inject the real value of the specialization constant at runtime.
 For the module associated with the host device, and possibly any device with non native spec constant support, the value is carried by the `spec_constant` object it-self.
 For modules natively supporting specialization constant, implementations must guaranty the values returned by the usage of the spec_constant materialized into a constant.
+
 
 ### Setting the value of spec constant
 
