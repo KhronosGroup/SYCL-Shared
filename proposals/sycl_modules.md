@@ -927,3 +927,56 @@ values on the specialization constant or (2) having the value of the specializat
 constant as a normal kernel parameter. If choosing (1), the original SPIR-V
 image should be part of the SYCL module so that the module can be specialized
 for non-known values.
+
+### Example
+
+The following code is showcasing how specialization constant can be used.
+The code perform a simple convolution using a scaled convolution kernel.
+The specialization constants are here used to inject, at runtime,
+the coefficients of the kernel.
+
+```cpp
+#include <CL/sycl.hpp>
+
+using namespace cl::sycl;
+
+using coeff_t = std::array<std::array<float, 3>, 3>;
+
+// Read coefficients from somewhere.
+coeff_t get_coefficients();
+
+// Identify the specialization constant.
+spec_id<coeff_t> coeff_id;
+
+void do_conv(buffer<float, 2> in, buffer<float, 2> out) {
+  queue myQueue;
+
+  myQueue.submit([&](handler &cgh) {
+    auto in_acc = in.get_access<access::mode::read>(cgh);
+    auto out_acc = out.get_access<access::mode::write>(cgh);
+
+    // Create a specialization constant placeholder.
+    spec_constant<coeff_t, coeff_id> coeff =
+        cgh.set_spec_constant<coeff_t, coeff_id>(get_coefficients());
+
+    cgh.parallel_for<class Convolution>(
+        in.get_range(), [=](cl::sycl::item<2> item_id) {
+          float acc = 0;
+          for (int i = -1; i < 2; i++) {
+            if (item_id[0] + i < 0 || item_id[0] + i > in_acc.get_range()[0])
+              continue;
+            for (int j = -1; j < 2; j++) {
+              if (item_id[1] + j < 0 || item_id[1] + j > in_acc.get_range()[1])
+                continue;
+              // the underlying JIT can see all the values of the array returned by coeff.get().
+              acc += coeff.get()[i + 1][j + 1] *
+                     in_acc[item_id[0] + i][item_id[1] + j];
+            }
+          }
+          out_acc[item_id] = acc;
+        });
+  });
+
+  myQueue.wait();
+}
+```
