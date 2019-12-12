@@ -4,9 +4,9 @@
 | ---------------- | ----------------------------------- |
 | Name             | SYCL Generalization                 |
 | Date of creation | 3rd Jun 2019                        |
-| Last updated     | 15th Nov  2019                      |
+| Last updated     | 12th Dec  2019                      |
 | Status           | Approved by SYCL working group      |
-| Current revision | 8                                   |
+| Current revision | 9                                   |
 | Dependencies     | SYCL Generalization                 |
 | Available        | N/A                                 |
 | Reply-to         | Ruyman Reyes <ruyman@codeplay.com>  |
@@ -106,11 +106,17 @@ in the scope of the current wording for this proposal to address the
 
 ## Revisions
 
+v 0.9:
+
+* Added wording to clarify `device_image` relationship with `module_state`
+* Using `module_state` consistently in the text
+* Clarified behavior of `this_module`.
+
 v 0.8:
 * Minor editorial fixes for publication
 * **sycl::invalid_object** thrown if joining empty vector of modules
 * Clarifying wording about SYCL modules vs `this_module`
-* Renamed `has_context` to `has_context_in`
+* Renamed `has_module` to `has_module_in`
 
 v 0.7:
 * Added `has_modules` and `has_any_module` functions to check whether
@@ -169,6 +175,14 @@ The *SYCL module* for an implementation that supports OpenCL could contain two
 *device images*, one with an SPIR-V IR and another with an ISA for a specific
 device. Both *device images* contain the function **foo**, represented in 
 different formats.
+Note that the type of *device images* contained in a module is implementation defined,
+and it does not affect the `state` of the SYCL module.
+The SYCL implementation will retrieve those `device images` that are in the requested `state`, 
+but it is implementation defined whether they are generated on request or not.
+In particular, if a SYCL context has *online compilation* capabilities, 
+the implementation can perform the desired transformations on the fly.
+If there is no *online compilation*, this is not expected.
+
 An *empty SYCL module* contains no *device images*.
 Two *SYCL module* objects are said to be equal if and only if the following
 conditions are true:
@@ -198,7 +212,7 @@ specialization constants in all modules, only if its intersection is empty.
 Otherwise, the values for the specialization constant are undefined.
 
 A SYCL *module* or *executable module* 
-(`sycl::module<sycl::module::kind::executable>`) represents a *SYCL module* 
+(`sycl::module<sycl::module_state::executable>`) represents a *SYCL module* 
 that contains a number of images and metadata ready to be used on a 
 device of the context associated with the *SYCL module*. 
 This implies there is at least one *SYCL kernel* that can be obtained from
@@ -226,8 +240,8 @@ In particular, being able to online-compile an OpenCL C source becomes an
 OpenCL specific feature, described on the OpenCL C backend document.
 
 SYCL is a single-source programming model, hence, for each translation unit, the SYCL
-*device compiler* will produce at least one SYCL *module* storing *device_images* for 
-all *kernels* and associated functions and symbols for each translation unit.
+*device compiler* will produce at least one SYCL *module* in a particular *state*,
+storing *device_images* for all *kernels* and associated functions and symbols for each translation unit.
 This module can be accessed through the `this_module` interface, described below.
 Users can create their own modules by using interoperability functionality, e.g, loading
 an OpenCL program or a SPIR-V binary.
@@ -265,12 +279,12 @@ device images with the same kernels.
 When dispatching kernels from within *SYCL command groups*, the *SYCL runtime*
 will use the module returned by *this_module* to find the desired kernel.
 The default process used to obtain the kernel image is as follows:
-1. If `this_module::get<module_status::executable>()` returns a module, find 
+1. If `this_module::get<module_state::executable>()` returns a module, find 
 the kernel there, jump to step 5. Otherwise, next step.
-2. If `this_module::get<module_status::object>()` returns a module, attempt
+2. If `this_module::get<module_state::object>()` returns a module, attempt
 to link the module. If successful, find the kernel there, jump to step 5. 
 Otherwise, next step.
-3. If `this_module::get<module_status::input>` returns a module,
+3. If `this_module::get<module_state::input>` returns a module,
 attempt to build the module. If successful, find the kernel there, jump to step
 5. Otherwise, next step.
 4. If no module has been found that contains the kernel, throw 
@@ -310,13 +324,13 @@ no *device images* and no *specialization constants*.
 ```cpp
 namespace sycl {
 
-enum class module_status {
+enum class module_state {
   input,
   object,
   executable
 };
 
-template<module_status status>
+template<module_state state>
 class module {
   module() = delete;
   module(/* Implementation defined constructor */);
@@ -328,17 +342,17 @@ class module {
 
   context get_context() const noexcept;
 
-  // Available if status is module_status::executable
+  // Available if state is module_state::executable
   template <typename KernelNameT>
   kernel get_kernel() const;
   kernel get_kernel(std::string kernelName) const;
 
-  // Available if  status is module_status::executable
+  // Available if  state is module_state::executable
   template <typename T>
   bool has_kernel() const noexcept;
   bool has_kernel(std::string kernelName) const;
 
-  // Available if status is module_status::executable
+  // Available if state is module_state::executable
   /* get_kernel_names.
    * Returns an std::vector where each entry is a kernel name
    * provided by the module.
@@ -363,7 +377,7 @@ class module {
    */
   bool has_spec_constant() const noexcept;
 
-  // Available if module_status::input
+  // Available if module_state::input
   /* set_spec_constant.
   * If ID is a spec constant residing in the current module, returns a
   * spec_constant immutable object to represent the binding of the value
@@ -427,7 +441,7 @@ namespace property {
  *  sycl::link_program_error if the input cannot be linked
  */
 template<typename... Options>
-module<module_status::executable> build(module<module_status::input> input, Options&&... ops);
+module<module_state::executable> build(module<module_state::input> input, Options&&... ops);
 
 /** compile.
  * Compiles the given input object into an object module.
@@ -437,7 +451,7 @@ module<module_status::executable> build(module<module_status::input> input, Opti
  *  sycl::compile_program_error if there are compilation errors
  */
 template<typename... Options>
-module<module_status::object> compile(module<module_status::input> input, Options&&... ops);
+module<module_state::object> compile(module<module_state::input> input, Options&&... ops);
 
 /** link.
  * Links the given unlinked module objects into a single module.
@@ -449,7 +463,7 @@ module<module_status::object> compile(module<module_status::input> input, Option
  *  sycl::invalid_object if objects.empty() == true
  */
 template<typename... Options>
-module<module_status::executable> link(std::vector<module<module_status::object>> objects, Options&&... ops);
+module<module_state::executable> link(std::vector<module<module_state::object>> objects, Options&&... ops);
 
 
 /** join.
@@ -459,8 +473,8 @@ module<module_status::executable> link(std::vector<module<module_status::object>
  * Throws:
  *  sycl::invalid_object : If modules are incompatible with each other or if modules.empty()
 */
-template<module_status status>
-module<status> join(std::vector<module<status>> modules);
+template<module_state state>
+module<state> join(std::vector<module<state>> modules);
 
 }  // namespace sycl
 ```
@@ -485,24 +499,24 @@ using binary_blob_t = std::pair<const char*, size_t>;
 /** create_with_source
  * Creates a *source module* from the given OpenCL C string source
  */
-module<module_status::input> create_with_source (context, std::string source);
+module<module_state::input> create_with_source (context, std::string source);
 
 /** create_program_with_il
  * Creates a *source module* from the given IL.
  */
-module<module_status::input> create_program_with_il (context, binary_blob_t il);
+module<module_state::input> create_program_with_il (context, binary_blob_t il);
 
 /** create_program_with_binary
  * Creates a *source module* from the given device binaries.
  */
-module<module_status::input> create_program_with_binary(context, binary_blob_t deviceBinary);
+module<module_state::input> create_program_with_binary(context, binary_blob_t deviceBinary);
 
 /** create_program_with_builtin_kernels
  * Creates a *source module* from the list of kernel names.
  * The kernel names must match OpenCL built-in kernels available in the OpenCL 
  * context represented by the given SYCL context.
  */
-module<module_status::input> create_program_with_builtin_kernels (context, std::vector<std::string> kernelNames)
+module<module_state::input> create_program_with_builtin_kernels (context, std::vector<std::string> kernelNames)
 
 }  // namespace opencl 
 }  // namespace sycl
@@ -519,15 +533,15 @@ A SYCL `kernel` object maps to a `cl_kernel` object in OpenCL.
 ```cpp
 namespace sycl {
 
-struct interop<backend::opencl, module<module_status::input>> {
+struct interop<backend::opencl, module<module_state::input>> {
   native_type = opencl::cl_program;
 };
 
-struct interop<backend::opencl, module<module_status::object>> {
+struct interop<backend::opencl, module<module_state::object>> {
   native_type = opencl::cl_program;
 };
 
-struct interop<backend::opencl, module<module_status::executable>> {
+struct interop<backend::opencl, module<module_state::executable>> {
   native_type = opencl::cl_program;
 }; 
 
@@ -538,9 +552,9 @@ struct interop<backend::opencl, kernel> {
 }  // namespace sycl
 ```
 
-The `cl_program` returned from interoperability with a `module<module_status::input>`
+The `cl_program` returned from interoperability with a `module<module_state::input>`
 is suitable to be used on the calls to `clCompileProgram` and `clBuildProgram`.
-The `cl_program` returned from interoperability with an `module<module_status::object>`
+The `cl_program` returned from interoperability with an `module<module_state::object>`
 is suitable to be used on the call `clLinkProgram`.
 The `cl_program` returned from interoperability with a `module` is not suitable
 for any OpenCL runtime compilation APIs (i.e. clBuildProgram, clCompile or clLink).
@@ -555,16 +569,16 @@ namespace opencl {
 /** import.
  * Returns the unlinked module object that encapsulates the given clProgram object.
  * The reference count of the clProgram is increased.
- * The status must match that of the clProgram object:
- *   module_status::input -> CL_PROGRAM_SOURCE or CL_PROGRAM_IL must not be null
- *   module_status::object -> CL_PROGRAM_BINARIES must not be null, 
+ * The state must match that of the clProgram object:
+ *   module_state::input -> CL_PROGRAM_SOURCE or CL_PROGRAM_IL must not be null
+ *   module_state::object -> CL_PROGRAM_BINARIES must not be null, 
 					cl_program is the outcome of a call to `clCompileProgram`
- *   module_status::executable -> CL_PROGRAM_BINARIES must not be null,
+ *   module_state::executable -> CL_PROGRAM_BINARIES must not be null,
  *        cl_program is the outcome of a call to `clLinkProgram` or 
  *        `clBuildProgram`and CL_PROGRAM_NUM_KERNELS must be at least 1.
  */
-template<module_status status>
-module<status> import(sycl::context, cl_program clProgram);
+template<module_state state>
+module<state> import(sycl::context, cl_program clProgram);
 
 }
 }
@@ -582,12 +596,12 @@ class context {
 
     /**
      * Returns a vector containing the module objects associated with this context
-     * instance with the requested status.
+     * instance with the requested state.
      * The modules returned may be a super-set of any user-created modules,
      * as implementations are free to create *SYCL module* instances of their own.
      */
-    template<module::module_status status>
-    std::vector<module<status>> get_modules() const noexcept;
+    template<module::module_state state>
+    std::vector<module<state>> get_modules() const noexcept;
 };
 }  // sycl
 ```
@@ -598,20 +612,20 @@ The API to dispatch a parallel-for from a pre-compiled binary remains the same,
 a sycl::kernel object can be passed to the `parallel_for` or `single_task` to use as a pre-compiled image
 of the user-given functor.
 
-A new method, `use_module(sycl::module<module_status::executable> moduleWithKernels)`, is added to the handler.
+A new method, `use_module(sycl::module<module_state::executable> moduleWithKernels)`, is added to the handler.
 The method associates a SYCL *module* object to the command group.
 All kernels used on the command group will be obtained only from the given SYCL *module*.
 If the SYCL *module* does not contain any of the requested kernel, `sycl::kernel_not_found` is thrown synchronously.
 If the user passes a *SYCL kernel* object that does not belong to the *SYCL module* passed to the `use_module` method,
 `sycl:invalid_kernel` is thrown synchronously.
 
-Additionally, a new method `use_module(sycl::module<module_status::executable> moduleWithKernels, DeviceImageSelectorT selector)` is also added
+Additionally, a new method `use_module(sycl::module<module_state::executable> moduleWithKernels, DeviceImageSelectorT selector)` is also added
 to the handler. In addition to use the given module to obtain all kernels used in the command group, 
 the `selector` function will be used to help the runtime select a particular *device image* from the module. 
 The signature of the *device image selector* is as follows:
 
 ```cpp
-using exe_mod = sycl::module<module_status::executable>;
+using exe_mod = sycl::module<module_state::executable>;
 
 exe_mod::device_image selector(exe_mod::device_image_iterator start, exe_mod::device_image_iterator end);
 ```
@@ -631,7 +645,7 @@ class handler {
    * Uses the given module as input to obtain the kernel objects
    * for all kernels in the command group.
    */
-  void use_module(sycl::module<module_status::executable> moduleWithKernels);
+  void use_module(sycl::module<module_state::executable> moduleWithKernels);
 
   /* use_module.
    * Uses the given module as origin to obtain the kernel objects
@@ -639,7 +653,7 @@ class handler {
    * DeviceImageSelectorT
    */
   template <typename DeviceImageSelectorT>
-  void use_module(sycl::module<module_status::executable> moduleWithKernels, DeviceImageSelectorT selector);
+  void use_module(sycl::module<module_state::executable> moduleWithKernels, DeviceImageSelectorT selector);
 
 }
 ```
@@ -651,30 +665,30 @@ The namespace `this_module` is defined on the SYCL headers and contains the foll
 ```cpp
 namespace sycl {
 namespace this_module {
-  template<module_status status>
-  module<status> get(context ctxt);
+  template<module_state state>
+  module<state> get(context ctxt);
 
-  bool has_any_modules(context ctxt);
+  bool has_any_module(context ctxt);
 
-  template<module_status status>
-  bool has_modules_in(context ctxt);
+  template<module_state state>
+  bool has_module_in(context ctxt);
 }  // this_module
 }  // sycl
 ```
 
-The function `has_any_modules(context ctxt)` returns *true* if there are modules available
+The function `has_any_module(context ctxt)` returns *true* if there are modules available
 in any state for the given SYCL context.
 
-The function `has_modules_in(context ctxt)` returns *true* if there are modules available
-on the given SYCL context and current translation unit in the *status* requested, *false* otherwise.
+The function `has_module_in(context ctxt)` returns *true* if there is a module available
+for the given SYCL context and current translation unit in the *state* requested, *false* otherwise.
 
 The module object returned by `get(context ctxt)` contains all available images in 
 the state requested by the user.
 
-If `has_modules_in` returns *true* for a particular value of `module_status` 
-and context, the `get` must return at least a module for the same values.
-If `has_any_modules` returns true, `get` must return at least one module 
-for at least one value of `module_status`.
+If `has_module_in` returns *true* for a particular value of `module_state` 
+and context, the `get` must return one module for the same values.
+If `has_any_module` returns true, `get` must return one module 
+for at least one value of `module_state`.
 
 **Implementation note**: Implementations can trigger compilation and linking
 operations when user request for an *executable* or *object* module if
@@ -732,7 +746,7 @@ in the module is backend specific:
 namespace sycl {
 namespace opencl {
   template<typename ID, typename T>
-  spec_constant<ID, T> set_spec_constant(module<module_status::executable> syclModule, T cst) const;
+  spec_constant<ID, T> set_spec_constant(module<module_state::executable> syclModule, T cst) const;
 }  // namespace opencl
 }  // namespace sycl
 ```
@@ -764,5 +778,3 @@ values on the specialization constant or (2) having the value of the specializat
 constant as a normal kernel parameter. If choosing (1), the original SPIR-V
 image should be part of the SYCL module so that the module can be specialized
 for non-known values.
-
-
