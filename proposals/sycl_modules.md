@@ -915,6 +915,8 @@ public:
 | `template<class T, spec_id<T>& s> spec_constant<T, s> set_spec_constant(T)` | Set the given value as the specialization constant value in the underlying module and returns a `spec_constant` handler usable in kernel. If the user specify to the handle a specific module to use, then the value given to `set_spec_constant` must match the the one used to build the module. In case of mismatch, the SYCL runtime raises an error. |
 | `template<class T, spec_id<T>& s> spec_constant<T, s> get_spec_constant()`  | Returns a `spec_constant` handler usable in kernel.                                                                                       |
 
+Only one call to `set_spec_constant` or `get_spec_constant` is allowed per spec_id and per command group scope.
+If more than one call per spec_id and per command group scope is made then an runtime exception is thrown.
 
 Note the value of the specialization constant depends on the module that is used,
 not on the placeholder object.
