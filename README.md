@@ -21,4 +21,4 @@ We encourage collaboration on this repository, if you would like to submit feedb
 | Proposal | Author(s) | Status | Created | Last updated |
 |----------|-----------|--------|---------|--------------|
 | [SYCL Generalization](./proposals/sycl_generalization.md) | Ruyman Reyes | Approved by SYCL working group | 3rd Jun 2019 | 15th Nov 2019 |
-| [SYCL Modules](./proposals/sycl_modules.md) | Ruyman Reyes | Approved by SYCL working group | 3rd June 2019 | 15th Nov 2019 |
+| [SYCL Modules](./proposals/sycl_modules.md) | Ruyman Reyes | Approved by SYCL working group | 3rd June 2019 | 12th Sep 2019 |
