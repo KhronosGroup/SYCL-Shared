@@ -110,7 +110,7 @@ v 0.10:
 
 * Rework of the specialization constant proposal
   * Add `spec_id` and `spec_constant` definitions
-  * Add API to manipulate a Module spec constants
+  * Add API to manipulate a Module specialization constants
 
 v 0.9:
 
@@ -315,8 +315,7 @@ When a module contains *specialization constants*, the method
 Note that, although a module may expose *specialization constants*, not all *device images* inside the module may natively support them,
 the method *`sycl::module<sycl::module_state::input>::native_spec_constant()`*  returns `true` if the module is capable of using *specialization constants* as immediate value when compiling the module image.
 When *specialization constants* are available but the user doesn't set values on them, the default values are used.
-The default values follow C++ initialization rules whenever not specified by 
-users.
+The default values follow C++ initialization rules whenever not specified by users.
 When *specialization constants* are not available in some images in a module,
 but the user sets a value to them, they are set as an additional kernel
 argument.
@@ -391,28 +390,28 @@ class module {
   bool native_spec_constant() const noexcept;
 
   // Available if module_status::executable
-  // Retrive the value of the spec constant associated with this module.
+  // Retrieve the value of the specialization constant associated with this module.
   // Call only valid from the host.
   template<class T, spec_id<T>& s>
   spec_constant<T, s> get_spec_constant(handler&);
 
   // Available if module_status::executable
   //              Only from C++17
-  // Set the value of the spec constant.
+  // Set the value of the specialization constant.
   // Call only valid from the host.
   template<auto& s>
   spec_constant<typename std::remove_reference_t<decltype(s)>::type, s>
     get_spec_constant(handler&);
 
   // Available if module_status::input
-  // Set the value of the spec constant.
+  // Set the value of the specialization constant.
   // Call only valid from the host.
   template<class T, spec_id<T>& s>
   void set_spec_constant(T);
 
   // Available if module_status::input
   //              Only from C++17
-  // Set the value of the spec constant.
+  // Set the value of the specialization constant.
   // Call only valid from the host.
   template<auto& s>
   void set_spec_constant(typename std::remove_reference_t<decltype(s)>::type);
@@ -731,18 +730,18 @@ module.
 
 Proposal [CP015](https://github.com/codeplaysoftware/standards-proposals/blob/master/spec-constant/index.md)
 introduced usage of SPIR-V specialization constants in SYCL.
-Specialization constants are associated with the SYCL 1.2.1 program class, 
+Specialization constants are associated with the SYCL 1.2.1 program class,
 and named using a C++ type like kernels.
 The program class gains a `set_spec_constant` method, that sets a runtime
 value to the specialization constant.
-The program can then be build with `build_with_kernel_type` to create a 
+The program can then be build with `build_with_kernel_type` to create a
 specialized kernel.
 
 ### Specialization constant types
 
 On the new, type-safe, module approach, specialization constants are 
-typically associated with SPIR-V module images but are not limited to such image.
-The specialization constant type is defined as an general SYCL type as below:
+typically associated with SPIR-V module images but are not limited to such images.
+The specialization constant type is defined as a general SYCL type as below:
 
 ```cpp
 namespace sycl {
@@ -771,7 +770,7 @@ class spec_constant {
 public:
   using type = T;
 
-  // Create an empty (invalid) spec constant.
+  // Create an empty (invalid) specialization constant.
   // Remains invalid until initialized by a call
   // to handler::set_spec_constant or
   // to handler::get_spec_constant
@@ -792,46 +791,47 @@ concrete value will only be known during the application execution.
 To create a new `spec_id` in a module, the user creates a `spec_id` object with an *automatic* or *static* storage duration in the namespace or class scope.
 The user then uses references to this object to bind the `spec_constant` value to the *identifier*.
 
-`spec_id` objects must be forward declare-able and cannot be moved or copied.
+`spec_id` objects must be forward declarable and cannot be moved or copied.
 
 `spec_constant` is a *placeholder type* used by the *SYCL implementation* to
 inject the real value of the specialization constant at runtime.
-For the module associated with the host device, and possibly any device with non native spec constant support, the value is carried by the `spec_constant` object it-self.
+For the module associated with the host device, and possibly any device with non native specialization constant support, the value is carried by the `spec_constant` object itself.
 For modules natively supporting specialization constant, implementations must guaranty the values returned by the usage of the spec_constant materialized into a constant.
 
+### Setting the value of specialization constant
 
-### Setting the value of spec constant
+To modify the value of a specialization constant, the following API is available.
 
-To modify the value of a spec constant, the following API is available.
-
-Given a SYCL module, a spec constant can be set by the `sycl::set_spec_constant` function.
+Given a SYCL module, a specialization constant can be set by the `sycl::set_spec_constant` function.
 
 ```cpp
 namespace sycl {
 
 template<class T, spec_id<T>& s>
-void set_spec_constant(module<module_status::input> syclModule, T);
+void set_spec_constant(module<module_status::input> &syclModule, T);
 
 }  // namespace sycl
 ```
+
 If C++17 or later is enabled, then the following overload is available
+
 ```cpp
 namespace sycl {
 
 template<auto& s>
-void set_spec_constant(module<module_status::input> syclModule,
+void set_spec_constant(module<module_status::input> &syclModule,
                        typename std::remove_reference_t<decltype(s)>::type);
 
 }  // namespace sycl
 ```
 
-It is valid for a user to set several times a spec constant with the same `spec_id`,
+It is valid for a user to set several times a specialization constant with the same `spec_id`,
 only the last version of the value will be consider when building the module.
 Calling this function is not allowed during the submission of a task.
 
-### Getting the value of spec constant in kernel
+### Getting the value of specialization constant in kernel
 
-To retrive the value of a spec constant in a SYCL kernel context, the following API is available.
+To retrieve the value of a specialization constant in a SYCL kernel context, the following API is available.
 
 ```cpp
 namespace sycl {
@@ -862,13 +862,14 @@ the returned value becomes a constant value available for the runtime compiler t
 From the SYCL compiler's perspective (C++ compiler) the value is understood to be a runtime value and
 for this reason it is not possible to use such value in a `constexpr`.
 
-### Retrieving a spec constant placeholder
+### Retrieving a specialization constant placeholder
 
 A `spec_constant` handler can be retrieved from the command group handler by either:
- - Getting the placeholder for a previously set specialization constant value;
-   - If no specialization constant where ever set, then the *placeholder* object holds the default value of its `spec_id`.
- - Setting a specialization constant value and retrieving the placeholder
-   - Performance notice: this function may cause the SYCL runtime to implicitly recompile the relevant SYCL module with the given value. This may have an important effect on performances and users should check their vendor recommendations on how to efficiently uses this functionality.
+
+- Getting the placeholder for a previously set specialization constant value;
+  - If no specialization constant where ever set, then the *placeholder* object holds the default value of its `spec_id`.
+- Setting a specialization constant value and retrieving the placeholder
+  - Performance notice: this function may cause the SYCL runtime to implicitly recompile the relevant SYCL module with the given value. This may have an important effect on performances and users should check their vendor recommendations on how to efficiently uses this functionality.
 
 The command group `handler` class is extended with the following API:
 
@@ -888,7 +889,9 @@ public:
 
 }  // namespace sycl
 ```
+
 If C++17 or later is enabled, then the following overloads are available
+
 ```cpp
 namespace sycl {
  class handler {
@@ -915,8 +918,8 @@ public:
 | `template<class T, spec_id<T>& s> spec_constant<T, s> set_spec_constant(T)` | Set the given value as the specialization constant value in the underlying module and returns a `spec_constant` handler usable in kernel. If the user specify to the handle a specific module to use, then the value given to `set_spec_constant` must match the the one used to build the module. In case of mismatch, the SYCL runtime raises an error. |
 | `template<class T, spec_id<T>& s> spec_constant<T, s> get_spec_constant()`  | Returns a `spec_constant` handler usable in kernel.                                                                                       |
 
-Only one call to `set_spec_constant` or `get_spec_constant` is allowed per spec_id and per command group scope.
-If more than one call per spec_id and per command group scope is made then an runtime exception is thrown.
+Only one call to `set_spec_constant` or `get_spec_constant` is allowed per `spec_id` and per command group scope.
+If more than one call per `spec_id` and per command group scope is made then an runtime exception is thrown.
 
 Note the value of the specialization constant depends on the module that is used,
 not on the placeholder object.
@@ -964,11 +967,11 @@ void do_conv(buffer<float, 2> in, buffer<float, 2> out) {
     cgh.parallel_for<class Convolution>(
         in.get_range(), [=](cl::sycl::item<2> item_id) {
           float acc = 0;
-          for (int i = -1; i < 2; i++) {
-            if (item_id[0] + i < 0 || item_id[0] + i > in_acc.get_range()[0])
+          for (int i = -1; i <= 1; i++) {
+            if (item_id[0] + i < 0 || item_id[0] + i >= in_acc.get_range()[0])
               continue;
-            for (int j = -1; j < 2; j++) {
-              if (item_id[1] + j < 0 || item_id[1] + j > in_acc.get_range()[1])
+            for (int j = -1; j <= 1; j++) {
+              if (item_id[1] + j < 0 || item_id[1] + j >= in_acc.get_range()[1])
                 continue;
               // the underlying JIT can see all the values of the array returned by coeff.get().
               acc += coeff.get()[i + 1][j + 1] *
