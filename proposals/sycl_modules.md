@@ -960,8 +960,8 @@ void do_conv(buffer<float, 2> in, buffer<float, 2> out) {
     auto in_acc = in.get_access<access::mode::read>(cgh);
     auto out_acc = out.get_access<access::mode::write>(cgh);
 
-    // Create a specialization constant placeholder.
-    specialization_constant<coeff_t, coeff_id> coeff =
+    // Create a specialization constant placeholder (sycl::specialization_constant object).
+    auto coeff =
         cgh.set_specialization_constant<coeff_t, coeff_id>(get_coefficients());
 
     cgh.parallel_for<class Convolution>(
