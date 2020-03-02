@@ -106,10 +106,15 @@ in the scope of the current wording for this proposal to address the
 
 ## Revisions
 
+v 0.11:
+
+* Add a `kernel_hanlder` object to handle access to specialization constant values
+* Remove `specialization_constant` in favor of `kernel_hanlder` member function
+
 v 0.10:
 
 * Rework of the specialization constant proposal
-  * Add `specialization _id` and `specialization _constant` definitions
+  * Add `specialization _id` and `specialization_constant` definitions
   * Add API to manipulate a Module specialization constants
 
 v 0.9:
@@ -311,7 +316,7 @@ A *SYCL module* objects may expose *specialization constants*.
 Specialization is intended for constant objects that will not have known constant values 
 until after initial generation of a module in an intermediate representation format (e.g. SPIR-V).
 When a module contains *specialization constants*, the method 
-*`sycl::module<sycl::module_state::input>::has_specialization_constant()`* returns `true`.
+*`sycl::module<sycl::module_state::input>::use_specialization_constant()`* returns `true`.
 Note that, although a module may expose *specialization constants*, not all *device images* inside the module may natively support them,
 the method *`sycl::module<sycl::module_state::input>::native_specialization_constant()`*  returns `true` if the module is capable of using *specialization constants* as immediate value when compiling the module image.
 When *specialization constants* are available but the user doesn't set values on them, the default values are used.
@@ -381,7 +386,7 @@ class module {
    * Returns true if the current module uses specialization constants.
    *
    */
-  bool has_specialization_constant() const noexcept;
+  bool use_specialization_constant() const noexcept;
 
   /**
    * Returns true if the current module can support specialization constants natively.
@@ -389,19 +394,15 @@ class module {
    */
   bool native_specialization_constant() const noexcept;
 
-  // Available if module_status::executable
   // Retrieve the value of the specialization constant associated with this module.
-  // Call only valid from the host.
   template<class T, specialization_id<T>& s>
-  specialization_constant<T, s> get_specialization_constant(handler&);
+  T get_specialization_constant() const;
 
-  // Available if module_status::executable
-  //              Only from C++17
+  // Only from C++17
   // Set the value of the specialization constant.
-  // Call only valid from the host.
   template<auto& s>
-  specialization_constant<typename std::remove_reference_t<decltype(s)>::type, s>
-    get_specialization_constant(handler&);
+  typename std::remove_reference_t<decltype(s)>::type
+    get_specialization_constant() const;
 
   // Available if module_status::input
   // Set the value of the specialization constant.
@@ -415,6 +416,15 @@ class module {
   // Call only valid from the host.
   template<auto& s>
   void set_specialization_constant(typename std::remove_reference_t<decltype(s)>::type);
+
+  // Return true if the specialization constant s is known to the module.
+  template<class T, specialization_id<T>& s>
+  bool has_specialization_constant() const noexcept;
+
+  // Only from C++17
+  // Return true if the specialization constant s is known to the module.
+  template<auto& s>
+  bool has_specialization_constant() const noexcept;
 };
 
 }  // namespace sycl
@@ -734,12 +744,66 @@ Specialization constants are associated with the SYCL 1.2.1 program class,
 and named using a C++ type like kernels.
 The program class gains a `set_specialization_constant` method, that sets a runtime
 value to the specialization constant.
-The program can then be build with `build_with_kernel_type` to create a
+The program can then be built with `build_with_kernel_type` to create a
 specialized kernel.
+
+### Example
+
+The following code is showcasing how specialization constant can be used with modules.
+The code performs a simple convolution using a scaled convolution kernel.
+The specialization constants are here used to inject, at runtime,
+the coefficients of the kernel.
+
+```cpp
+#include <CL/sycl.hpp>
+
+using namespace sycl;
+
+using coeff_t = std::array<std::array<float, 3>, 3>;
+
+// Read coefficients from somewhere.
+coeff_t get_coefficients();
+
+// Identify the specialization constant.
+specialization_id<coeff_t> coeff_id;
+
+void do_conv(buffer<float, 2> in, buffer<float, 2> out) {
+  queue myQueue;
+
+  myQueue.submit([&](handler &cgh) {
+    auto in_acc = in.get_access<access::mode::read>(cgh);
+    auto out_acc = out.get_access<access::mode::write>(cgh);
+
+    // Set the coefficient of the convolution as constant.
+    // This will build a specific kernel the coefficient available as literals.
+    cgh.set_specialization_constant<coeff_t, coeff_id>(get_coefficients());
+
+    cgh.parallel_for<class Convolution>(
+        in.get_range(), [=](item<2> item_id, kernel_handler h) {
+          float acc = 0;
+          coeff_t coeff = h.get_specialization_constant<coeff_t, coeff_id>();
+          for (int i = -1; i <= 1; i++) {
+            if (item_id[0] + i < 0 || item_id[0] + i >= in_acc.get_range()[0])
+              continue;
+            for (int j = -1; j <= 1; j++) {
+              if (item_id[1] + j < 0 || item_id[1] + j >= in_acc.get_range()[1])
+                continue;
+              // the underlying JIT can see all the values of the array returned by coeff.get().
+              acc += coeff[i + 1][j + 1] *
+                     in_acc[item_id[0] + i][item_id[1] + j];
+            }
+          }
+          out_acc[item_id] = acc;
+        });
+  });
+
+  myQueue.wait();
+}
+```
 
 ### Specialization constant types
 
-On the new, type-safe, module approach, specialization constants are 
+In the new, type-safe, module approach, specialization constants are 
 typically associated with SPIR-V module images but are not limited to such images.
 The specialization constant type is defined as a general SYCL type as below:
 
@@ -765,111 +829,104 @@ public:
   explicit constexpr specialization_id(Args&&...);
 };
 
-template <class T, specialization_id<T>& s>
-class specialization_constant {
-public:
-  using type = T;
-
-  // Create an empty (invalid) specialization constant.
-  // Remains invalid until initialized by a call
-  // to handler::set_specialization_constant or
-  // to handler::get_specialization_constant
-  specialization_constant();
-
-  specialization_constant(const specialization_constant&) = default;
-  specialization_constant& operator=(const specialization_constant&) = default;
-
-  T get() const; // explicit access.
-  operator T() const;  // implicit conversion.
-};
-
 }  // namespace sycl
 ```
 
-`specialization_id` is used by the *SYCL implementation* to *reference* constant whose
-concrete value will only be known during the application execution.
+`specialization_id` objects are used by the *SYCL implementation* to *reference* constant whose concrete value will only be known during the application execution.
 To create a new `specialization_id` in a module, the user creates a `specialization_id` object with an *automatic* or *static* storage duration in the namespace or class scope.
-The user then uses references to this object to bind the `specialization_constant` value to the *identifier*.
 
 `specialization_id` objects must be forward declarable and cannot be moved or copied.
 
-`specialization_constant` is a *placeholder type* used by the *SYCL implementation* to
-inject the real value of the specialization constant at runtime.
-For the module associated with the host device, and possibly any device with non native specialization constant support, the value is carried by the `specialization_constant` object itself.
-For modules natively supporting specialization constant, implementations must guaranty the values returned by the usage of the `specialization_constant` materialized into a constant.
-
-### Setting the value of specialization constant
-
-To modify the value of a specialization constant, the following API is available.
-
-Given a SYCL module, a specialization constant can be set by the `sycl::set_specialization_constant` function.
+### Querying if a specialization constant is known to a module
 
 ```cpp
-namespace sycl {
+template<module_state state>
+class module {
+public:
+[...]
+  // Return true if the specialization constant s is known to the module.
+  template<class T, specialization_id<T>& s>
+  bool has_specialization_constant() const noexcept;
 
-template<class T, specialization_id<T>& s>
-void set_specialization_constant(module<module_status::input> &syclModule, T);
-
-}  // namespace sycl
+  // Only from C++17
+  // Return true if the specialization constant s is known to the module.
+  template<auto& s>
+  bool has_specialization_constant() const noexcept;
+[...]
+};
 ```
 
-If C++17 or later is enabled, then the following overload is available
+The function `has_specialization_constant` returns true if the `specialization_id<T>` id is known to the current module.
+If no values were ever set for the module, but the id is known to the module, the function still returns true.
+This function only checks if it is meaningful to get or set the value of a `specialization_id<T>` with a given module.
+
+### Setting the value of specialization constant of a module
+
+A specialization constant for a module can be set while in the `input` state.
 
 ```cpp
-namespace sycl {
+template<module_state state>
+class module {
+public:
+[...]
+  template<class T, specialization_id<T>& s>
+  void set_specialization_constant(T);
 
-template<auto& s>
-void set_specialization_constant(module<module_status::input> &syclModule,
-                       typename std::remove_reference_t<decltype(s)>::type);
-
-}  // namespace sycl
+  // Available if module_status::input
+  //              Only from C++17
+  // Set the value of the specialization constant.
+  // Call only valid from the host.
+  template<auto& s>
+  void set_specialization_constant(typename std::remove_reference_t<decltype(s)>::type);
+[...]
+};
 ```
 
-It is valid for a user to set several times a specialization constant with the same `specialization_id`,
-only the last version of the value will be consider when building the module.
-Calling this function is not allowed during the submission of a task.
+The function `set_specialization_constant` binds the runtime value of type `T` to the module for the `specialization_id<T>` identifier.
+If a value was already set for the given id then the value is overwritten by the new value.
+
+For all versions of `set_specialization_constant`, if the `specialization_id<T>` is unknown to the module (`has_specialization_constant` returns false for this id) then a runtime exception is thrown.
+
+### Getting the value of a specialization constant of a module
+
+```cpp
+template<module_state state>
+class module {
+public:
+[...]
+  template<class T, specialization_id<T>& s>
+  T get_specialization_constant() const;
+
+  // Only from C++17
+  template<auto& s>
+  typename std::remove_reference_t<decltype(s)>::type
+    get_specialization_constant() const;
+[...]
+};
+```
+
+The `get_specialization_constant` returns the value identified by `specialization_id<T>` that is bound to this module.
+If no value was set for the id, then the function returns the default value associated with the id.
+
+For all versions of `get_specialization_constant`, if the `specialization_id<T>` is unknown to the module (`has_specialization_constant` returns false for this id) then a runtime exception is thrown.
 
 ### Getting the value of specialization constant in kernel
 
-To retrieve the value of a specialization constant in a SYCL kernel context, the following API is available.
+Values of specialization constants can be retrieved inside kernels using the `kernel_handler` function `get_specialization_constant`.
 
-```cpp
-namespace sycl {
-
-template<class T, specialization_id<T>& s>
-T get_specialization_constant(const specialization_constant<T, s>&);
-
-}  // namespace sycl
-```
-If C++17 or later is enabled, then the following overload is available
-```cpp
-namespace sycl {
-
-template<auto& s>
-typename std::remove_reference_t<decltype(s)>::type
-get_specialization_constant(const specialization_constant<typename std::remove_reference_t<decltype(s)>::type, s>&);
-
-}  // namespace sycl
-```
-
-This call is only valid whitin a SYCL kernel context and the `specialization_constant` value must have been
-created by the handler that invoked the kernel from which the `sycl::get_specialization_constant` is called.
-
-If the module has native support for specialization constant,
-the returned value becomes a constant value available for the runtime compiler to use for optimisations.
+A call to `kernel_handler::get_specialization_constant` will return the value bound to the id and the module which has been used to run the kernel/
+If the module has native support for specialization constant, the returned value becomes a literal value available for the runtime compiler to use for optimizations.
+Calls to `kernel_handler::get_specialization_constant` are constant and never throw.
 
 **Note:** the value may become a constant (known numerical value), although this may only happen at runtime.
 From the SYCL compiler's perspective (C++ compiler) the value is understood to be a runtime value and
-for this reason it is not possible to use such value in a `constexpr`.
+for this reason, it is not possible to use such value as a `constexpr` value.
 
-### Retrieving a specialization constant placeholder
+Usage of a `specialization_id` via the `kernel_handler` makes the device compiler bind the id to the module in which the will kernel lives, making it "known" to the module.
 
-A `specialization_constant` handler can be retrieved from the command group handler by either:
+### Setting and getting a specialization constant during a submit
 
-- Getting the placeholder for a previously set specialization constant value;
-  - If no specialization constant where ever set, then the *placeholder* object holds the default value of its `specialization_id`.
-- Setting a specialization constant value and retrieving the placeholder
-  - Performance notice: this function may cause the SYCL runtime to implicitly recompile the relevant SYCL module with the given value. This may have an important effect on performances and users should check their vendor recommendations on how to efficiently uses this functionality.
+Specialization constant values can be set/retrieved directly via the handler object.
 
 The command group `handler` class is extended with the following API:
 
@@ -879,109 +936,42 @@ namespace sycl {
 // ...
 public:
 
- template<class T, specialization_id<T>& s>
- specialization_constant<T, s> set_specialization_constant(T);
+  // Set the value of a specialization constant prior to invocation.
+  template<class T, specialization_id<T>& s>
+  void set_specialization_constant(T);
+  // From C++17
+  // Set the value of a specialization constant prior to invocation.
+  template<auto& s>
+  void set_specialization_constant(typename std::remove_reference_t<decltype(s)>::type);
 
- template<class T, specialization_id<T>& s>
- specialization_constant<T, s> get_specialization_constant();
+  // Get the value of a specialization constant prior to invocation.
+  template<class T, specialization_id<T>& s>
+  T get_specialization_constant() const;
+  // From C++17
+  // Get the value of a specialization constant prior to invocation.
+  template<auto& s>
+  typename std::remove_reference_t<decltype(s)>::type get_specialization_constant() const;
 // ...
 };
 
 }  // namespace sycl
 ```
 
-If C++17 or later is enabled, then the following overloads are available
+The function `set_specialization_constant` binds the runtime value of type `T` to underlying module for the `specialization_id<T>` identifier.
+If the `specialization_id<T>` is unknown to the underlying module a runtime exception is thrown.
+If a module were specified (using `handler::use_module`), the value given to `set_specialization_constant` must be consistent with the value used to build the specified module.
+If the values are not consistent then a runtime exception is thrown.
+*Implementation note*: the use of `set_specialization_constant` can force the runtime to rebuild a module if one of the specialization constant value changes.
+This may impact performance. Users are invited to check the documentation of their implementation on how to optimally use this function.
 
-```cpp
-namespace sycl {
- class handler {
-// ...
-public:
+The `get_specialization_constant` returns the value identified by `specialization_id<T>` that is bound to the underlying module.
+If no value was set for the id, then the function returns the default value associated with the id.
 
-  // Same as template<class T, specialization_id<T>& s> specialization_constant<T, s> set_specialization_constant(T)
-  template<auto& s>
-  specialization_constant<typename std::remove_reference_t<decltype(s)>::type, s>
-    set_specialization_constant(typename std::remove_reference_t<decltype(s)>::type);
-
-  // Same as template<class T, specialization_id<T>& s> specialization_constant<T, s> get_specialization_constant()
-  template<auto& s>
-  specialization_constant<typename std::remove_reference_t<decltype(s)>::type, s>
-    get_specialization_constant();
-// ...
-};
-
-}  // namespace sycl
-```
-
-| Member function                                                             | Description                                                                                                                               |
-|-----------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| `template<class T, specialization_id<T>& s> specialization_constant<T, s> set_specialization_constant(T)` | Set the given value as the specialization constant value in the underlying module and returns a `specialization_constant` handler usable in kernel. If the user specify to the handle a specific module to use, then the value given to `set_specialization_constant` must match the the one used to build the module. In case of mismatch, the SYCL runtime raises an error. |
-| `template<class T, specialization_id<T>& s> specialization_constant<T, s> get_specialization_constant()`  | Returns a `specialization_constant` handler usable in kernel.                                                                                       |
-
-Only one call to `set_specialization_constant` or `get_specialization_constant` is allowed per `specialization_id` and per command group scope.
-If more than one call per `specialization_id` and per command group scope is made then an runtime exception is thrown.
-
-Note the value of the specialization constant depends on the module that is used,
-not on the placeholder object.
-
-*Implementation note*: Although specialization constants are meant for situations
-where there is a final online compilation stage, if the implementation supports
-compiling directly on the backend for an ISA, specialization constants can still
-be supported via two mechanism: (1) Having different specialized images for known
+*Implementation note*: specialization constants are meant for situations
+where there is a final online compilation stage. Although if the implementation statically
+compiles directly to an ISA, specialization constants can still
+be supported via two mechanisms: (1) Having different specialized images for known
 values on the specialization constant or (2) having the value of the specialization
 constant as a normal kernel parameter. If choosing (1), the original SPIR-V
 image should be part of the SYCL module so that the module can be specialized
 for non-known values.
-
-### Example
-
-The following code is showcasing how specialization constant can be used.
-The code perform a simple convolution using a scaled convolution kernel.
-The specialization constants are here used to inject, at runtime,
-the coefficients of the kernel.
-
-```cpp
-#include <CL/sycl.hpp>
-
-using namespace cl::sycl;
-
-using coeff_t = std::array<std::array<float, 3>, 3>;
-
-// Read coefficients from somewhere.
-coeff_t get_coefficients();
-
-// Identify the specialization constant.
-specialization_id<coeff_t> coeff_id;
-
-void do_conv(buffer<float, 2> in, buffer<float, 2> out) {
-  queue myQueue;
-
-  myQueue.submit([&](handler &cgh) {
-    auto in_acc = in.get_access<access::mode::read>(cgh);
-    auto out_acc = out.get_access<access::mode::write>(cgh);
-
-    // Create a specialization constant placeholder (sycl::specialization_constant object).
-    auto coeff =
-        cgh.set_specialization_constant<coeff_t, coeff_id>(get_coefficients());
-
-    cgh.parallel_for<class Convolution>(
-        in.get_range(), [=](cl::sycl::item<2> item_id) {
-          float acc = 0;
-          for (int i = -1; i <= 1; i++) {
-            if (item_id[0] + i < 0 || item_id[0] + i >= in_acc.get_range()[0])
-              continue;
-            for (int j = -1; j <= 1; j++) {
-              if (item_id[1] + j < 0 || item_id[1] + j >= in_acc.get_range()[1])
-                continue;
-              // the underlying JIT can see all the values of the array returned by coeff.get().
-              acc += coeff.get()[i + 1][j + 1] *
-                     in_acc[item_id[0] + i][item_id[1] + j];
-            }
-          }
-          out_acc[item_id] = acc;
-        });
-  });
-
-  myQueue.wait();
-}
-```
